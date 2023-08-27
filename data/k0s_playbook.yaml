@@ -1,0 +1,72 @@
+---
+- name: K0S Installation
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Install Curl
+      apt:
+        name: curl
+    - name: Download K0S Software
+      get_url:
+        url: https://get.k0s.sh
+        dest: /root/k0s.sh
+        mode: 0500
+
+    - name: Install K0S Software
+      command: /root/k0s.sh
+
+- name: K0S Controller Node
+  hosts: k0s-node0
+  gather_facts: false
+  tags: controller
+  tasks:
+    - name: Create K0S Config Dir
+      file:
+        state: directory
+        path: /etc/k0s
+
+    - name: Create K0S Config
+      command: k0s config create
+      register: k0scfg
+
+    - name: Write cfg
+      copy:
+        dest: /etc/k0s/k0s.yaml
+        content: "{{ k0scfg.stdout }}"
+
+    - name: Install K0S Controller Service
+      command: k0s install controller --enable-worker -c /etc/k0s/k0s.yaml
+      
+    - name: Start K0S Controller Service
+      command: k0s start
+
+    - name: Wait for controller to start
+      pause:
+        seconds: 5
+
+    - name: Create Join Token
+      command: k0s token create --role=worker
+      register: token
+
+    - name: Save token
+      set_fact:
+        k0stoken: "{{ token.stdout }}"
+
+- name: K0S Worker Node Setup
+  hosts: all:!k0s-node0
+  tags: worker
+  tasks:
+    - name: "Copy /etc/hosts to backend"
+      copy:
+        src: /etc/hosts
+        dest: /etc/hosts
+    - name: "Write Join Token to temp file"
+      copy:
+        dest: /tmp/k0stoken
+        content: |
+          {{ hostvars['k0s-node0']['k0stoken'] }}
+    - name: Install Worker Service
+      command: k0s install worker --token-file /tmp/k0stoken
+
+    - name: Start k0s Service
+      command: k0s start
